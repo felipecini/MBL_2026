@@ -1,0 +1,72 @@
+function Felipe_lev0_readcaSuite2p(dirsel, overwrite)
+% KATIE_LEV0_READCA reads in F_subtracted from ROI gui output
+% and output struct called dataCa with time series info
+% Katie Ferguson, Yale University, 2016
+% Stefan edited to load data from Suite2p
+
+global outputDirCardin
+global info
+
+% the analysis type, string to find data directories and name files
+analysis  = 'lev0_readca';
+
+% loop over the various directories and read in the ca files
+nDirs = length(info);
+if nargin<1
+    dirsel = 1:nDirs;
+end
+
+for iDir = dirsel
+    exptag = info(iDir).dir;
+    parts = split(exptag, '_');
+    mouse = parts{1};
+    outputDir = fullfile(outputDirCardin, analysis, mouse, exptag);
+    mkdir(outputDir);
+    
+    dataDir       = fullfile('\\D:\Practice data\PX1171b\SD2', mouse, exptag);
+    
+    inputFile    = {};
+    inputFile = fullfile(dataDir, 'suite2p\plane0\Fall.mat');
+    dataCa.trial{1}=[];
+    
+    fprintf('Processing %s\n', inputFile);
+    
+    outputFilename = fullfile(outputDir,info(iDir).dir);
+    if exist([outputFilename '.mat'], 'file') && overwrite==0
+        fprintf('skipping %s file %s \n', info(iDir).dir,outputFilename), continue,end
+    
+    
+    if ~exist(inputFile) , continue,end
+    
+    try
+        S=load(inputFile); %,'F','Fneu','iscell','spks');
+    catch
+        lasterr
+        continue,
+    end
+    
+    dFF_start_indx=1;
+    
+    nSamples           = length(S.F);
+    caFs                 = info(iDir).fcasample;
+    F_subtracted = S.F-1*S.Fneu;   %%% Need to use 1 to account for the opto artifact, not sure need to keep for other analysis 2025/07/27
+    F_subtracted = F_subtracted(S.iscell(:,1)==1,:);
+    spks = S.spks(S.iscell(:,1)==1,:);
+    % struct for raw F_sub ca data
+    dataCa.time{1}  = (0:nSamples-1)./caFs;
+    dataCa.trial{1} = [dataCa.trial{1} F_subtracted];
+    dataCa.numCells{1}= length(F_subtracted(:,1));
+    dataCa.fcasample  = caFs;
+    dataCa.label    = {info(iDir).dir};
+    dataCa.cfg      = [];
+    dataCa.spks = spks;
+    dataCa.iscell = S.iscell(:,1);
+%     dataCa.time_timestamp{1} = S.tvec';
+    dataCa.time_start_ind{1}=dFF_start_indx;
+    
+    save(outputFilename, 'dataCa','-v7.3');
+end
+
+
+  
+  

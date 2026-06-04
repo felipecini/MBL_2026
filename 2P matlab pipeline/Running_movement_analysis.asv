@@ -1,0 +1,775 @@
+beh_time_S = (0:(1/17.50):((19923-1)*(1/17.5))) + 53877/500 -12;
+
+
+
+figure
+offset = 0;
+for i = 1:size(datadFF.goodCells,1);
+    plot(datadFF.dFF(i, :) + offset);
+    hold on
+    offset = offset + 6;
+end
+
+plot(behSpeed.speed_cm_s - 10)
+
+
+
+%% --------- INPUTS you already have ----------
+t_ca   = datadFF.time(:);          % calcium time
+dFF    = datadFF.dFF;              % C x T
+t_beh1 = behSpeed.behTime_s(:);    % behavior time (option A)
+t_beh2 = [] %beh_time_S%;                       % behavior time (option B: if you prefer beh_time_S, put it here)
+
+% Choose the time you want to use for behavior (must match speed vector):
+if ~isempty(t_beh2)
+    t_b = t_beh2(:);
+else
+    t_b = t_beh1(:);
+end
+v_b = behSpeed.speed_cm_s(:);
+
+% Force t_b and v_b to same length (prevents plot length mismatch)
+N = min(numel(t_b), numel(v_b));
+t_b = t_b(1:N);
+v_b = v_b(1:N);
+
+%% --------- 1) Ensure calcium time and dFF have same length ----------
+[nCells, nTimePts] = size(dFF);
+if numel(t_ca) ~= nTimePts
+    M = min(numel(t_ca), nTimePts);
+    t_ca = t_ca(1:M);
+    dFF  = dFF(:, 1:M);
+end
+
+%% --------- 2) Trim to overlap window (so interpolation is in-range) ----------
+t_min = max(min(t_ca), min(t_b));
+t_max = min(max(t_ca), max(t_b));
+if ~(t_min < t_max)
+    error('No temporal overlap between calcium and behavior time ranges.');
+end
+
+keep = (t_ca >= t_min) & (t_ca <= t_max);
+t_ca_trimmed = t_ca(keep);
+dFF_trimmed  = dFF(:, keep);
+
+%% --------- 3) Interpolate speed onto calcium timebase ----------
+speed_interp = interp1(t_b, v_b, t_ca_trimmed, 'linear');
+% Clean edges (no extrapolation): fill NaNs near the ends if any
+speed_interp = fillmissing(speed_interp, 'nearest');
+
+%% --------- 4) Detect bouts from behavior (sleep/low/high) ----------
+bout = detect_bouts_simple(t_b, v_b, ...
+    'MaxGapSec', 1, 'MinDurSec', 1.1, 'PeakMinHigh', 2.5);
+
+%% --------- 5) PLOT: calcium (stacked) + speed line + shaded bouts ----------
+figure; set(gcf,'Renderer','opengl'); hold on
+
+% Calcium
+offset = 0;
+for i = 1:size(dFF_trimmed, 1)
+    plot(t_ca_trimmed, dFF_trimmed(i,:) + offset, 'Color', [0 0 0 0.55], 'LineWidth', 0.9);
+    offset = offset + 6;
+end
+
+% Speed (aligned to calcium timebase, shifted down for visibility)
+plot(t_ca_trimmed, speed_interp - 10, 'g', 'LineWidth', 1.2);
+
+xlabel('Time (s)'); ylabel('dF/F (offset) and speed'); 
+title('Calcium traces (black) + speed (green) - shades: sleep (purple) /low movement and grooming (orange)/locomotion (blue)');
+box off
+
+% Shade bouts (on calcium axes). If clocks differ by constant dt, add it here.
+ax = gca;
+col_sleep = [0.45 0.10 0.65];  % purple
+col_low   = [0.95 0.60 0.10];  % orange
+col_high  = [0.10 0.40 0.90];  % blue
+alphaVal  = 0.18;               % adjust to taste (0.35–0.9)
+
+% If you need a constant shift (e.g., behavior is +2.3 s): set dt and add to bouts
+dt = 0; % e.g., dt = -2.3;
+shade_bouts_on_axes(ax, bout.sleep + dt, col_sleep, alphaVal);
+shade_bouts_on_axes(ax, bout.low   + dt, col_low,   alphaVal);
+shade_bouts_on_axes(ax, bout.high  + dt, col_high,  alphaVal);
+
+xlim([t_min, t_max]);  % common window
+%%
+%% --------- Calcium traces + speed + hypnogram-style state bar ----------
+
+figure; set(gcf,'Renderer','opengl'); hold on
+
+% ------------------------
+% Plot stacked calcium traces
+% ------------------------
+offset_step = 6;
+offset = 0;
+for i = 1:size(dFF_trimmed, 1)
+    plot(t_ca_trimmed, dFF_trimmed(i,:) + offset, ...
+        'Color',[0 0 0 0.55], ...
+        'LineWidth',0.9);
+    offset = offset + offset_step;
+end
+
+% ------------------------
+% Plot speed (shifted down)
+% ------------------------
+plot(t_ca_trimmed, speed_interp - 10, ...
+    'Color',[0 0.6 0], ...
+    'LineWidth',1.2);
+
+xlabel('Time (s)');
+ylabel('dF/F (offset) and speed');
+title('Calcium traces + speed with behavioral state bar');
+box off
+
+xlim([min(t_ca_trimmed), max(t_ca_trimmed)/2.65]);
+% ------------------------
+% Add 1 dF/F scale bar
+% ------------------------
+yl = ylim;
+xl = xlim;
+
+scale_dff = 1;                                % 1 dF/F
+x_bar = xl(1) + 0.02*range(xl);
+y_bar = yl(1) + 0.06*range(yl);
+
+plot([x_bar x_bar], ...
+     [y_bar y_bar + scale_dff], ...
+     'k', 'LineWidth',2);
+
+text(x_bar + 0.01*range(xl), ...
+     y_bar + scale_dff/2, ...
+     '1 dF/F', ...
+     'FontSize',10, ...
+     'VerticalAlignment','middle');
+
+% ------------------------
+% Hypnogram-style behavior bar (top)
+% ------------------------
+col_sleep = [0.45 0.10 0.65];   % purple
+col_low   = [0.95 0.60 0.10];   % orange
+col_high  = [0.10 0.40 0.90];   % blue
+
+yl = ylim;
+bar_height = 0.04 * range(yl);
+y_bar_top  = yl(2) - bar_height;
+
+% Sleep
+for i = 1:size(bout.sleep,1)
+    rectangle('Position', ...
+        [bout.sleep(i,1), y_bar_top, diff(bout.sleep(i,:)), bar_height], ...
+        'FaceColor',col_sleep, ...
+        'EdgeColor','none');
+end
+
+% Low locomotion / grooming
+for i = 1:size(bout.low,1)
+    rectangle('Position', ...
+        [bout.low(i,1), y_bar_top, diff(bout.low(i,:)), bar_height], ...
+        'FaceColor',col_low, ...
+        'EdgeColor','none');
+end
+
+% High locomotion
+for i = 1:size(bout.high,1)
+    rectangle('Position', ...
+        [bout.high(i,1), y_bar_top, diff(bout.high(i,:)), bar_height], ...
+        'FaceColor',col_high, ...
+        'EdgeColor','none');
+end
+
+% ------------------------
+% Legend for state bar
+% ------------------------
+hSleep = plot(nan,nan,'s','MarkerSize',8,'MarkerFaceColor',col_sleep,'MarkerEdgeColor','none');
+hLow   = plot(nan,nan,'s','MarkerSize',8,'MarkerFaceColor',col_low,'MarkerEdgeColor','none');
+hHigh  = plot(nan,nan,'s','MarkerSize',8,'MarkerFaceColor',col_high,'MarkerEdgeColor','none');
+
+legend([hSleep hLow hHigh], ...
+       {'Sleep','Low locomotion / grooming','High locomotion'}, ...
+       'Location','northeast', ...
+       'Box','off');
+
+%% --- PARAMETERS ---
+% choose which bouts to analyze:
+bout_types = {'sleep','low','high'};
+colors = struct('sleep',[0.45 0.10 0.65],'low',[0.95 0.60 0.10],'high',[0.10 0.40 0.90]);
+
+% using dFF_trimmed and t_ca_trimmed from your pipeline
+t = t_ca_trimmed;       
+dFF = dFF_trimmed;      % C × T
+
+% Assumes you already have:
+%   t_ca_trimmed (T×1), dFF_trimmed (C×T), and bout.sleep/low/high (Nx2 times in seconds)
+
+t  = t_ca_trimmed(:);
+dFF = dFF_trimmed;
+dt = median(diff(t));                      % frame interval
+T = numel(t);
+
+% Build boolean masks from bout intervals (on the calcium timebase)
+is_sleep = false(T,1);
+for i = 1:size(bout.sleep,1)
+    is_sleep = is_sleep | (t >= bout.sleep(i,1) & t <= bout.sleep(i,2));
+end
+
+is_low = false(T,1);
+for i = 1:size(bout.low,1)
+    is_low = is_low | (t >= bout.low(i,1) & t <= bout.low(i,2));
+end
+
+is_high = false(T,1);
+for i = 1:size(bout.high,1)
+    is_high = is_high | (t >= bout.high(i,1) & t <= bout.high(i,2));
+end
+
+is_none = ~(is_sleep | is_low | is_high);
+
+%%
+% Parameters / colors
+bout_types = {'sleep','low','high'};
+colors = struct('sleep',[0.45 0.10 0.65], 'low',[0.95 0.60 0.10], 'high',[0.10 0.40 0.90]);
+
+for bt = 1:numel(bout_types)
+    name = bout_types{bt};
+    B = bout.(name);   % Nx2 [on off]
+    if isempty(B), fprintf('%s: no bouts\n', name); continue; end
+
+    figure; hold on
+    xlabel('Time from bout start (s)'); ylabel('dF/F (avg across cells)');
+    title(['Per-bout traces + mean (', name, ')']);
+
+    traces = {}; times = {};  % cell arrays to avoid mismatched lengths
+    for i = 1:size(B,1)
+        idx = (t >= B(i,1)) & (t <= B(i,2));
+        if ~any(idx), continue; end
+        tr_t = t(idx) - B(i,1);             % time relative to bout start
+        tr_y = mean(dFF(:, idx), 1);        % average across cells
+        plot(tr_t, tr_y, 'Color', [colors.(name) 0.30]);  % individual bout
+        times{end+1} = tr_t; %#ok<SAGROW>
+        traces{end+1} = tr_y; %#ok<SAGROW>
+    end
+
+    if isempty(traces), continue; end
+
+    % Interpolate each bout trace to a common time vector and average
+    t_max = max(cellfun(@(x) x(end), times));
+    t_common = linspace(0, t_max, 400);
+    M = numel(traces);
+    Y = nan(M, numel(t_common));
+    for k = 1:M
+        Y(k,:) = interp1(times{k}, traces{k}, t_common, 'linear', 'extrap');
+    end
+    mu  = mean(Y, 1, 'omitnan');
+    sem = std(Y, 0, 1, 'omitnan') / sqrt(M);
+
+    % Plot mean ± SEM
+    fill([t_common fliplr(t_common)], [mu-sem fliplr(mu+sem)], ...
+         colors.(name), 'FaceAlpha', 0.15, 'EdgeColor', 'none');
+    plot(t_common, mu, 'k', 'LineWidth', 2);
+end
+
+%% --- Find transitions (example: sleep → high) ---
+% Window (seconds)
+w_pre = 2; 
+w_post = 5;
+ns_pre  = round(w_pre  / dt);
+ns_post = round(w_post / dt);
+win = -ns_pre:ns_post;
+t_rel = win * dt;
+
+% Pairs you want to analyze:
+pairs = { {'sleep','high'}, {'sleep','low'}, {'low','high'} };
+
+% Toggle: also include transitions from 'none' → target bout
+include_none_to = true;
+
+masks  = struct('sleep',is_sleep,'low',is_low,'high',is_high);
+colors = struct('sleep',[0.45 0.10 0.65],'low',[0.95 0.60 0.10],'high',[0.10 0.40 0.90]);
+
+for pp = 1:numel(pairs)
+    fromS = pairs{pp}{1};
+    toS   = pairs{pp}{2};
+
+    m1 = masks.(fromS);
+    m2 = masks.(toS);
+
+    % Direct transitions: last frame of m1 -> first frame of m2
+    idx_direct = find(m1(1:end-1) & m2(2:end)) + 1;
+
+    % Optionally add none->toS transitions
+    idx_none2to = [];
+    if include_none_to
+        idx_none2to = find(is_none(1:end-1) & m2(2:end)) + 1;
+    end
+
+    % Combine and keep only indices that fit the window fully
+    idx_trans = unique([idx_direct; idx_none2to]);
+    idx_trans = idx_trans(idx_trans > ns_pre & idx_trans <= (T - ns_post));
+
+    if isempty(idx_trans)
+        fprintf('No %s → %s transitions (with current settings)\n', fromS, toS);
+        continue
+    end
+
+    % Collect snippets: average across cells first, then across transitions
+    % (You can switch order if you prefer.)
+    snippets = nan(numel(t_rel), numel(idx_trans));
+    for ii = 1:numel(idx_trans)
+        idx0 = idx_trans(ii);
+        seg  = idx0 + win;
+        snippets(:,ii) = mean(dFF(:, seg), 1);   % mean across cells
+    end
+
+    trans_mean = mean(snippets, 2, 'omitnan');
+    trans_sem  = std(snippets, 0, 2, 'omitnan') / sqrt(size(snippets,2));
+
+    % Plot mean ± SEM for this transition
+    figure; hold on
+    fill([t_rel fliplr(t_rel)], [trans_mean-trans_sem; flipud(trans_mean+trans_sem)]', ...
+         colors.(toS), 'FaceAlpha', 0.25, 'EdgeColor', 'none');
+    plot(t_rel, trans_mean, 'Color', colors.(toS), 'LineWidth', 2);
+    xline(0, 'k--');
+    xlabel('Time (s) relative to transition');
+    ylabel('dF/F (mean across cells)');
+    title([fromS ' → ' toS ' (mean ± SEM), 2 s pre, 5 s post']);
+    box off
+end
+
+%% box plot
+% Time & data
+t  = t_ca_trimmed(:);        % T×1
+dFF = dFF_trimmed;           % C×T
+[C, T] = size(dFF);
+
+% Build boolean masks from bout intervals (on calcium time)
+is_sleep = false(T,1);
+for i = 1:size(bout.sleep,1)
+    is_sleep = is_sleep | (t >= bout.sleep(i,1) & t <= bout.sleep(i,2));
+end
+
+is_low = false(T,1);
+for i = 1:size(bout.low,1)
+    is_low = is_low | (t >= bout.low(i,1) & t <= bout.low(i,2));
+end
+
+is_high = false(T,1);
+for i = 1:size(bout.high,1)
+    is_high = is_high | (t >= bout.high(i,1) & t <= bout.high(i,2));
+end
+
+%%
+
+
+% ---- Per-cell condition means ----
+cell_mean_sleep = nan(C,1);
+cell_mean_low   = nan(C,1);
+cell_mean_high  = nan(C,1);
+
+for c = 1:C
+    if any(is_sleep), cell_mean_sleep(c) = mean(dFF(c, is_sleep), 'omitnan'); end
+    if any(is_low),   cell_mean_low(c)   = mean(dFF(c, is_low),   'omitnan'); end
+    if any(is_high),  cell_mean_high(c)  = mean(dFF(c, is_high),  'omitnan'); end
+end
+
+% Keep only rows where at least one condition is present (optional)
+valid_rows = ~(isnan(cell_mean_sleep) & isnan(cell_mean_low) & isnan(cell_mean_high));
+cell_mean_sleep = cell_mean_sleep(valid_rows);
+cell_mean_low   = cell_mean_low(valid_rows);
+cell_mean_high  = cell_mean_high(valid_rows);
+
+% ---- BOX PLOT with individual points ----
+%% ---- BOX PLOT with individual round points (categorical-safe) ----
+
+% Python‑style muted colors
+COL_SLEEP = [0.45 0.10 0.65];  % purple
+COL_LOW   = [0.95 0.60 0.10];  % orange
+COL_HIGH  = [0.10 0.40 0.90];  % blue
+
+figure; hold on
+
+% Build categorical labels
+cats = [ repmat("sleep",numel(cell_mean_sleep),1); ...
+         repmat("low",  numel(cell_mean_low),1);   ...
+         repmat("high", numel(cell_mean_high),1) ];
+
+vals = [cell_mean_sleep; cell_mean_low; cell_mean_high];
+
+% Convert to categorical and rename categories
+cats = categorical(cats);
+cats = renamecats(cats, ...
+    {'sleep','low','high'}, ...
+    {'Sleep','Low Locomotion','High Locomotion'});
+
+% Draw boxchart (neutral gray boxes)
+boxchart(cats, vals, ...
+    'BoxFaceColor',[0.85 0.85 0.85], ...
+    'LineWidth',1.2);
+
+% Overlay individual points (round markers, jittered)
+xpos = double(cats);
+jitter = 0.06 * randn(size(vals));
+
+hSleep = scatter(xpos(cats=="Sleep") + jitter(cats=="Sleep"), ...
+                 vals(cats=="Sleep"), ...
+                 42, [0.45 0.10 0.65], 'filled', ...
+                 'MarkerFaceAlpha',0.65);
+
+hLow = scatter(xpos(cats=="Low Locomotion") + jitter(cats=="Low Locomotion"), ...
+               vals(cats=="Low Locomotion"), ...
+               42, [0.95 0.60 0.10], 'filled', ...
+               'MarkerFaceAlpha',0.65);
+
+hHigh = scatter(xpos(cats=="High Locomotion") + jitter(cats=="High Locomotion"), ...
+                vals(cats=="High Locomotion"), ...
+                42, [0.10 0.40 0.90], 'filled', ...
+                'MarkerFaceAlpha',0.65);
+
+% Axis labels and title
+ylabel('Mean dF/F', 'FontSize',25)
+title('Per-cell dF/F with individual cells', ...
+      'FontSize',20, 'FontWeight','bold')
+
+% Clean aesthetics
+set(gca,'FontSize',20)
+box off
+
+% Legend (explicit handles)
+legend([hSleep hLow hHigh], ...
+       {'Sleep','Low Locomotion','High Locomotion'}, ...
+       'Location','northwest', ...
+       'FontSize',10, ...
+       'Box','off');
+
+% ---- BAR PLOT (mean ± SEM) with individual points ----
+figure; hold on
+groups = {'sleep','low','high'};
+means = [mean(cell_mean_sleep,'omitnan'), mean(cell_mean_low,'omitnan'), mean(cell_mean_high,'omitnan')];
+sems  = [std(cell_mean_sleep,0,'omitnan')/sqrt(sum(~isnan(cell_mean_sleep))), ...
+         std(cell_mean_low, 0,'omitnan')/sqrt(sum(~isnan(cell_mean_low))),  ...
+         std(cell_mean_high,0,'omitnan')/sqrt(sum(~isnan(cell_mean_high)))];
+
+b = bar(1:3, means, 'FaceColor',[0.7 0.7 0.7]); 
+errorbar(1:3, means, sems, 'k', 'LineStyle','none', 'LineWidth',1.2);
+
+% Overlay individual points (jittered)
+scatter(1 + 0.07*randn(numel(cell_mean_sleep),1), cell_mean_sleep, 20, [0.45 0.10 0.65], 'filled', 'MarkerFaceAlpha',0.6);
+scatter(2 + 0.07*randn(numel(cell_mean_low),1),   cell_mean_low,   20, [0.95 0.60 0.10], 'filled', 'MarkerFaceAlpha',0.6);
+scatter(3 + 0.07*randn(numel(cell_mean_high),1),  cell_mean_high,  20, [0.10 0.40 0.90], 'filled', 'MarkerFaceAlpha',0.6);
+
+xlim([0.5 3.5]); set(gca,'XTick',1:3,'XTickLabel',groups);
+ylabel('Mean dF/F (per cell)'); title('Per-cell dF/F (mean ± SEM) with individual points'); box off
+
+
+%% --- Calcium activity as a function of sleep bout duration ---
+% For each sleep bout, compute mean dF/F in early vs late portion,
+% and also bin activity across normalized bout time.
+
+if isempty(bout.sleep)
+    fprintf('No sleep bouts found.\n');
+else
+    B = bout.sleep;  % Nx2 [on off] in seconds
+    nBouts = size(B,1);
+
+    % --- 1a) Scatter: bout duration vs mean dF/F ---
+    bout_dur   = B(:,2) - B(:,1);          % duration of each bout (s)
+    bout_meanY = nan(nBouts,1);
+    for i = 1:nBouts
+        idx = (t >= B(i,1)) & (t <= B(i,2));
+        if any(idx)
+            bout_meanY(i) = mean(dFF(:, idx), 'all', 'omitnan');
+        end
+    end
+
+    figure; hold on
+    scatter(bout_dur, bout_meanY, 50, [0.45 0.10 0.65], 'filled', 'MarkerFaceAlpha', 0.7);
+    % Fit a line
+    valid = ~isnan(bout_dur) & ~isnan(bout_meanY);
+    if sum(valid) >= 2
+        p = polyfit(bout_dur(valid), bout_meanY(valid), 1);
+        x_fit = linspace(min(bout_dur(valid)), max(bout_dur(valid)), 100);
+        plot(x_fit, polyval(p, x_fit), 'k--', 'LineWidth', 1.5);
+    end
+    xlabel('Sleep bout duration (s)');
+    ylabel('Mean dF/F (all cells)');
+    title('Mean calcium activity vs sleep bout duration');
+    box off
+
+    % --- 1b) Normalized time course: activity across normalized sleep bout ---
+    % Each bout is resampled to 100 time bins (0-100% of bout)
+    nBins    = 100;
+    t_norm   = linspace(0, 1, nBins);
+    Y_norm   = nan(nBouts, nBins);
+
+    for i = 1:nBouts
+        idx = (t >= B(i,1)) & (t <= B(i,2));
+        if sum(idx) < 3, continue; end
+        tr_t = t(idx);
+        tr_y = mean(dFF(:, idx), 1);          % mean across cells, 1xK
+        t_rel_norm = (tr_t - tr_t(1)) / (tr_t(end) - tr_t(1));  % normalize to [0 1]
+        Y_norm(i,:) = interp1(t_rel_norm, tr_y, t_norm, 'linear');
+    end
+
+    mu_norm  = mean(Y_norm, 1, 'omitnan');
+    sem_norm = std(Y_norm, 0, 1, 'omitnan') / sqrt(sum(~isnan(Y_norm(:,1))));
+
+    figure; hold on
+    % Individual bouts (faint)
+    for i = 1:nBouts
+        if ~any(isnan(Y_norm(i,:)))
+            plot(t_norm*100, Y_norm(i,:), 'Color', [0.45 0.10 0.65 0.15], 'LineWidth', 0.8);
+        end
+    end
+    % Mean ± SEM
+    fill([t_norm*100 fliplr(t_norm*100)], ...
+         [mu_norm - sem_norm, fliplr(mu_norm + sem_norm)], ...
+         [0.45 0.10 0.65], 'FaceAlpha', 0.25, 'EdgeColor', 'none');
+    plot(t_norm*100, mu_norm, 'Color', [0.45 0.10 0.65], 'LineWidth', 2.5);
+    xlabel('Sleep bout progress (%)');
+    ylabel('Mean dF/F (across cells)');
+    title('Calcium activity across normalized sleep bout time');
+    box off
+
+    % --- 1c) Early vs Late: split each bout in half ---
+    early_dFF = nan(nBouts,1);
+    late_dFF  = nan(nBouts,1);
+    for i = 1:nBouts
+        idx = find((t >= B(i,1)) & (t <= B(i,2)));
+        if numel(idx) < 4, continue; end
+        mid = round(numel(idx)/2);
+        early_dFF(i) = mean(dFF(:, idx(1:mid)),   'all', 'omitnan');
+        late_dFF(i)  = mean(dFF(:, idx(mid+1:end)),'all', 'omitnan');
+    end
+
+    valid = ~isnan(early_dFF) & ~isnan(late_dFF);
+    figure; hold on
+    % Lines connecting early to late for each bout
+    for i = 1:nBouts
+        if valid(i)
+            plot([1 2], [early_dFF(i) late_dFF(i)], 'Color', [0.45 0.10 0.65 0.35], 'LineWidth', 1);
+        end
+    end
+    % Mean ± SEM
+    means_el = [mean(early_dFF(valid),'omitnan'), mean(late_dFF(valid),'omitnan')];
+    sems_el  = [std(early_dFF(valid),0,'omitnan')/sqrt(sum(valid)), ...
+                std(late_dFF(valid), 0,'omitnan')/sqrt(sum(valid))];
+    errorbar([1 2], means_el, sems_el, 'ko-', 'LineWidth', 2, 'MarkerSize', 8, 'MarkerFaceColor','k');
+    xlim([0.5 2.5]); set(gca,'XTick',[1 2],'XTickLabel',{'Early sleep','Late sleep'});
+    ylabel('Mean dF/F (all cells)');
+    title('Calcium activity: early vs late within sleep bout');
+    box off
+end
+
+%% --- Calcium activity as a function of sleep bout duration ---
+if isempty(bout.sleep)
+    fprintf('No sleep bouts found.\n');
+else
+    B = bout.sleep;
+    nBouts = size(B,1);
+
+    % --- 1a) Scatter: bout duration vs mean dF/F ---
+    bout_dur   = B(:,2) - B(:,1);
+    bout_meanY = nan(nBouts,1);
+    for i = 1:nBouts
+        idx = (t >= B(i,1)) & (t <= B(i,2));
+        if any(idx)
+            bout_meanY(i) = mean(dFF(:, idx), 'all', 'omitnan');
+        end
+    end
+
+    figure; hold on
+    scatter(bout_dur, bout_meanY, 50, [0.45 0.10 0.65], 'filled', 'MarkerFaceAlpha', 0.7);
+    valid = ~isnan(bout_dur) & ~isnan(bout_meanY);
+    if sum(valid) >= 2
+        p = polyfit(bout_dur(valid), bout_meanY(valid), 1);
+        x_fit = linspace(min(bout_dur(valid)), max(bout_dur(valid)), 100);
+        plot(x_fit, polyval(p, x_fit), 'k--', 'LineWidth', 1.5);
+    end
+    xlabel('Sleep bout duration (s)');
+    ylabel('Mean dF/F (all cells)');
+    title('Mean calcium activity vs sleep bout duration');
+    box off
+
+   % --- 1b) Absolute time course: activity across absolute sleep bout time ---
+    % Aligned to bout start (t=0), with 5 seconds pre-bout baseline.
+    dt_ca      = median(diff(t));
+    pre_win    = 10;                                  % seconds before bout start
+    max_dur    = 60  ;                                % alternative - max(bout_dur);
+    t_abs      = (-pre_win : dt_ca : max_dur)';      % from -5s to max bout duration
+    nBins_abs  = numel(t_abs);
+    Y_abs      = nan(nBouts, nBins_abs);
+
+    for i = 1:nBouts
+        % Grab pre-bout + bout samples
+        t_start_pre = B(i,1) - pre_win;             % 5s before bout start
+        t_end_bout  = B(i,2);
+        idx = (t >= t_start_pre) & (t <= t_end_bout);
+        if sum(idx) < 3, continue; end
+        tr_t = t(idx) - B(i,1);                     % time relative to bout start (so pre = negative)
+        tr_y = mean(dFF(:, idx), 1);                 % mean across cells
+        % Only fill time points within this segment's range
+        in_range = t_abs >= tr_t(1) & t_abs <= tr_t(end);
+        Y_abs(i, in_range) = interp1(tr_t, tr_y, t_abs(in_range), 'linear');
+    end
+
+    n_contrib  = sum(~isnan(Y_abs), 1);
+    mu_abs     = mean(Y_abs, 1, 'omitnan');
+    sem_abs    = std(Y_abs, 0, 1, 'omitnan') ./ sqrt(n_contrib);
+
+    figure; hold on
+    % Individual bouts (faint)
+    for i = 1:nBouts
+        valid_pts = ~isnan(Y_abs(i,:));
+        if any(valid_pts)
+            plot(t_abs(valid_pts), Y_abs(i, valid_pts), ...
+                'Color', [0.45 0.10 0.65 0.15], 'LineWidth', 0.8);
+        end
+    end
+    % Mean ± SEM
+    fill([t_abs' fliplr(t_abs')], ...
+         [mu_abs - sem_abs, fliplr(mu_abs + sem_abs)], ...
+         [0.45 0.10 0.65], 'FaceAlpha', 0.25, 'EdgeColor', 'none');
+    plot(t_abs, mu_abs, 'Color', [0.45 0.10 0.65], 'LineWidth', 2.5);
+    xline(0, 'k--', 'Sleep onset', 'LineWidth', 1.2);  % mark bout start
+    xlabel('Time from sleep bout start (s)');
+    ylabel('Mean dF/F (across cells)');
+    title(['Calcium activity across sleep bout (absolute time, -', num2str(pre_win),'s pre-bout)']);
+    box off
+
+    % --- 1c) Early vs Late ---
+    early_dFF = nan(nBouts,1);
+    late_dFF  = nan(nBouts,1);
+    for i = 1:nBouts
+        idx = find((t >= B(i,1)) & (t <= B(i,2)));
+        if numel(idx) < 4, continue; end
+        mid = round(numel(idx)/2);
+        early_dFF(i) = mean(dFF(:, idx(1:mid)),    'all', 'omitnan');
+        late_dFF(i)  = mean(dFF(:, idx(mid+1:end)), 'all', 'omitnan');
+    end
+
+    valid = ~isnan(early_dFF) & ~isnan(late_dFF);
+    figure; hold on
+    for i = 1:nBouts
+        if valid(i)
+            plot([1 2], [early_dFF(i) late_dFF(i)], 'Color', [0.45 0.10 0.65 0.35], 'LineWidth', 1);
+        end
+    end
+    means_el = [mean(early_dFF(valid),'omitnan'), mean(late_dFF(valid),'omitnan')];
+    sems_el  = [std(early_dFF(valid),0,'omitnan')/sqrt(sum(valid)), ...
+                std(late_dFF(valid), 0,'omitnan')/sqrt(sum(valid))];
+    errorbar([1 2], means_el, sems_el, 'ko-', 'LineWidth', 2, 'MarkerSize', 8, 'MarkerFaceColor','k');
+    xlim([0.5 2.5]); set(gca,'XTick',[1 2],'XTickLabel',{'Early sleep','Late sleep'});
+    ylabel('Mean dF/F (all cells)');
+    title('Calcium activity: early vs late within sleep bout');
+    box off
+end
+
+%% --- Individual cell tracking: sleep / low / high (connected lines) ---
+% Each cell is a line connecting its mean dF/F across the 3 conditions.
+% Color encodes direction: purple = decreases into sleep, orange = increases into sleep.
+
+% Recompute per-cell means (in case variables were overwritten above)
+[C, ~] = size(dFF);
+cell_mean_sleep = nan(C,1);
+cell_mean_low   = nan(C,1);
+cell_mean_high  = nan(C,1);
+
+for c = 1:C
+    if any(is_sleep), cell_mean_sleep(c) = mean(dFF(c, is_sleep), 'omitnan'); end
+    if any(is_low),   cell_mean_low(c)   = mean(dFF(c, is_low),   'omitnan'); end
+    if any(is_high),  cell_mean_high(c)  = mean(dFF(c, is_high),  'omitnan'); end
+end
+
+valid = ~isnan(cell_mean_sleep) & ~isnan(cell_mean_low) & ~isnan(cell_mean_high);
+ms = cell_mean_sleep(valid);
+ml = cell_mean_low(valid);
+mh = cell_mean_high(valid);
+nValid = sum(valid);
+
+% Color each cell by whether it goes up or down from high → sleep
+delta_sleep_vs_high = ms - mh;
+cmap_up   = [0.85 0.20 0.20];   % red  = increases in sleep vs high
+cmap_down = [0.20 0.45 0.85];   % blue = decreases in sleep vs high
+
+figure; hold on
+for c = 1:nValid
+    if delta_sleep_vs_high(c) > 0
+        col = cmap_up;
+    else
+        col = cmap_down;
+    end
+    plot([1 2 3], [mh(c) ml(c) ms(c)], '-o', ...
+        'Color', [col 0.35], ...           % alpha via RGB+alpha trick
+        'MarkerFaceColor', col, ...
+        'MarkerEdgeColor', 'none', ...
+        'MarkerSize', 5, ...
+        'LineWidth', 0.9);
+end
+
+% Overlay group mean ± SEM in black
+group_means = [mean(mh,'omitnan'), mean(ml,'omitnan'), mean(ms,'omitnan')];
+group_sems  = [std(mh,0,'omitnan')/sqrt(nValid), ...
+               std(ml,0,'omitnan')/sqrt(nValid), ...
+               std(ms,0,'omitnan')/sqrt(nValid)];
+errorbar([1 2 3], group_means, group_sems, 'ko-', ...
+    'LineWidth', 2.2, 'MarkerSize', 9, 'MarkerFaceColor', 'k');
+
+xlim([0.5 3.5]);
+set(gca, 'XTick', [1 2 3], 'XTickLabel', {'High movement','Low movement','Sleep'});
+ylabel('Mean dF/F (per cell)');
+title(sprintf('Individual cell tracking across states (n=%d cells)\nRed = increases in sleep, Blue = decreases in sleep', nValid));
+box off
+
+% --- Summary: what fraction of cells increase vs decrease in sleep? ---
+n_up   = sum(delta_sleep_vs_high > 0);
+n_down = sum(delta_sleep_vs_high <= 0);
+fprintf('\n--- Cell directionality (sleep vs high movement) ---\n');
+fprintf('  Increases in sleep: %d / %d cells (%.1f%%)\n', n_up,   nValid, 100*n_up/nValid);
+fprintf('  Decreases in sleep: %d / %d cells (%.1f%%)\n', n_down, nValid, 100*n_down/nValid);
+%%
+% Helper to aggregate per-bout means (per cell, per bout)
+function M = per_bout_means_from_intervals(t, dFF, intervals)
+    % Returns a column vector concatenating mean dF/F for each bout across all cells.
+    % So length(M) = sum over bouts of (#cells with any samples in that bout).
+    M = [];
+    for i = 1:size(intervals,1)
+        idx = (t >= intervals(i,1) & t <= intervals(i,2));
+        if ~any(idx), continue; end
+        bout_means = mean(dFF(:, idx), 2, 'omitnan');  % C×1
+        M = [M; bout_means]; %#ok<AGROW>
+    end
+end
+
+% Compute per-bout means for each condition
+pb_sleep = per_bout_means_from_intervals(t, dFF, bout.sleep);
+pb_low   = per_bout_means_from_intervals(t, dFF, bout.low);
+pb_high  = per_bout_means_from_intervals(t, dFF, bout.high);
+
+% Plot as box+points
+figure; hold on
+cats_pb = [repmat("sleep",numel(pb_sleep),1); ...
+           repmat("low",  numel(pb_low),1);   ...
+           repmat("high", numel(pb_high),1)];
+vals_pb = [pb_sleep; pb_low; pb_high];
+
+boxchart(categorical(cats_pb), vals_pb, 'BoxFaceColor',[0.85 0.85 0.85]);
+
+gscatter(double(categorical(cats_pb))+0.07*randn(size(vals_pb)), vals_pb, cats_pb, ...
+         [0.45 0.10 0.65; 0.95 0.60 0.10; 0.10 0.40 0.90], '.', 12, 'off');
+
+ylabel('Mean dF/F (per bout)'); title('Per-bout dF/F by condition');
+set(gca,'XTickLabel',{'sleep','low','high'}); box off
+%% --------- 6) (Optional) Save trimmed arrays and bouts for downstream stats ----------
+SaveBase = 'SD2_260218_01';
+res = struct();
+res.t_ca_trimmed = t_ca_trimmed;
+res.dFF_trimmed  = dFF_trimmed;
+res.speed_on_ca  = speed_interp(:);
+res.sleep_bouts  = bout.sleep;
+res.low_bouts    = bout.low;
+res.high_bouts   = bout.high;
+save([SaveBase '_trimmed_and_bouts.mat'], 'res', '-v7.3');
+
+% Also export CSVs if you want
+writematrix(bout.sleep, [SaveBase '_sleep_bouts.csv']);
+writematrix(bout.low,   [SaveBase '_low_bouts.csv']);
+writematrix(bout.high,  [SaveBase '_high_bouts.csv']);

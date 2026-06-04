@@ -1,0 +1,126 @@
+function Felipe_beh_make_speed_from_csv(dirsel, overwrite, opts)
+% FINAL WORKING VERSION for TAB-delimited CSVs from your tracking software.
+% Automatically detects Frame, X, Y, Distance_px columns.
+% Does NOT require any column name inputs from user.
+
+    %% Globals
+    global info outputDirCardin
+    analysisBehTTL = 'lev0_readframes_beh';
+
+    %% Defaults
+    if nargin < 3 || isempty(opts), opts = struct(); end
+    if ~isfield(opts,'pixel2cm'),      opts.pixel2cm = 0.02; end
+    if ~isfield(opts,'smoothSigma_s'), opts.smoothSigma_s = 0.2;  end
+
+    %% Column detection patterns - change if uses different names
+    patFrame = ["frame"];
+    patX     = ["x"];
+    patY     = ["y"];
+    patDist  = ["distance"];
+
+    for iDir = dirsel
+
+        exptag = info(iDir).dir;
+        parts  = split(exptag,'_'); 
+        mouse  = parts{1};
+
+        %% Load TTL
+        behTTL_file = fullfile(outputDirCardin, analysisBehTTL, mouse, exptag, [exptag '.mat']);
+        if ~exist(behTTL_file,'file')
+            warning('No behavior TTL file for %s', exptag);
+        end
+        S = load(behTTL_file,'dataTTL_beh');
+        dataTTL_beh = S.dataTTL_beh;
+
+        %% Output
+        outDir  = fileparts(behTTL_file);
+        outFile = fullfile(outDir, [exptag '_behSpeed.mat']);
+        if exist(outFile,'file') && overwrite==0
+            fprintf('Skipping existing: %s\n', outFile);
+            
+        end
+
+        %% CSV path
+        if ~isfield(info(iDir),'behCSVfile') || ~exist(info(iDir).behCSVfile,'file')
+            warning('Missing CSV file for %s', exptag);
+            
+        end
+        csvPath = info(iDir).behCSVfile;
+
+        fprintf('\n[INFO] Reading TAB-delimited CSV: %s\n', csvPath);
+
+        %% -------- READ AS TAB-DELIMITED TABLE --------
+        T = readtable(csvPath, 'Delimiter', ',', ...
+                      'FileType','text', ...
+                      'PreserveVariableNames', true);
+
+        fprintf('[INFO] Columns:\n');
+        disp(T.Properties.VariableNames');
+
+        %% -------- AUTOMATIC COLUMN DETECTION --------
+        findCol = @(patterns) find(any(contains(lower(T.Properties.VariableNames), patterns),1),1);
+
+        colFrame = find(strcmp((T.Properties.VariableNames), 'Frame'),1); % Change as needed
+        colX     = findCol(patX);
+        colY     = findCol(patY);
+        colDist  = findCol(patDist);
+
+        if isempty(colFrame) || isempty(colX) || isempty(colY) || isempty(colDist)
+            error('Could not find Frame, X, Y, Distance_px columns.');
+        end
+
+        fprintf('[INFO] Using columns:\n');
+        fprintf('  Frame → %s\n', T.Properties.VariableNames{colFrame});
+        fprintf('  X     → %s\n', T.Properties.VariableNames{colX});
+        fprintf('  Y     → %s\n', T.Properties.VariableNames{colY});
+        fprintf('  Dist  → %s\n', T.Properties.VariableNames{colDist});
+
+        %% Extract
+        frameCsv = double(T{:, colFrame});
+        x_pix    = double(T{:, colX});
+        y_pix    = double(T{:, colY});
+        dist_px  = double(T{:, colDist});
+
+        %% TTL-derived timing
+        behFs   = 1 / median(diff(double(dataTTL_beh.frameInd)) / dataTTL_beh.fs);
+        behTime = double(dataTTL_beh.frameInd) / dataTTL_beh.fs;
+
+        %% Sync lengths
+        nTTL = numel(behTime);
+        nCSV = numel(frameCsv);
+        nUse = min(nTTL, nCSV);
+
+        frameCsv = frameCsv(1:nUse);
+        x_pix    = x_pix(1:nUse);
+        y_pix    = y_pix(1:nUse);
+        dist_px  = dist_px(1:nUse);
+        behTime  = behTime(1:nUse);
+
+        %% Compute speed (cm/s)
+        speed_cm_s = dist_px * opts.pixel2cm * behFs;
+
+        %% Smooth
+        if opts.smoothSigma_s > 0
+            sigmaF = max(1, round(opts.smoothSigma_s * behFs));
+            g = gausswin(6*sigmaF+1, 2.5);
+            g = g / sum(g);
+            speed_cm_s = conv(speed_cm_s, g, 'same');
+        end
+
+        %% Save
+        behSpeed = struct();
+        behSpeed.frameCsv = frameCsv;
+        behSpeed.x_pix    = x_pix;
+        behSpeed.y_pix    = y_pix;
+        behSpeed.distance_px = dist_px;
+        behSpeed.speed_cm_s  = speed_cm_s;
+        behSpeed.behFs       = behFs;
+        behSpeed.behTime_s   = behTime;
+        behSpeed.pixel2cm    = opts.pixel2cm;
+        behSpeed.smoothSigma_s = opts.smoothSigma_s;
+        behSpeed.nFrames     = nUse;
+
+        save(outFile, 'behSpeed', '-v7.3');
+        fprintf('[DONE] Saved: %s (n=%d frames)\n', outFile, nUse);
+    end
+end

@@ -1,0 +1,51 @@
+%% 0) Globals
+global outputDirCardin info
+outputDirCardin = 'Z:\Cardin Lab\Felipe\2p sleep pilot\FC02B\150minOfSD_260316/Results';
+
+
+% Fill info for your experiment(s)
+% Minimal fields required:
+%   info(i).dir, info(i).mouse, info(i).fsample, info(i).fcasample, info(i).behCSVfile
+i = 1;
+info(i).dir       = '150minOfSD_260316';   % your exptag used by CA TTL function
+info(i).mouse     = '150minOfSD';
+info(i).fsample   = 5000;              % TTL sampling rate (Hz)
+info(i).fcasample = 33;                % calcium rate (Hz) if needed elsewhere
+info(i).behCSVfile = 'Z:\Cardin Lab\Felipe\2p sleep pilot\FC02B\150minOfSD_260316\beh\FC02B_150minSD_02_260316_170229_269\FC02B_150minSD_02_0001_LocationOutput.csv';
+
+dirsel    = 1;
+overwrite = 1;
+
+%% 1) You already ran your calcium TTL extractor and lev1/lev2 steps
+%    - CA TTL saved:  fullfile(outputDirCardin,'lev0_readframes',mouse,exptag,[exptag '.mat'])
+%    - lev1_align_caframes produced files consumed by:
+%    - Stefan_lev2_calculate_dFF(dirsel, overwrite) -> saves datadFF (dFF + goodCells)
+
+%% 2) Behavior TTL (behavior-only reader from earlier message)
+optsBehTTL = struct('ttlFolder',outputDirCardin, ...
+                    'minPulseWidth_ms',0.3,'minIFI_ms',5,'gapFactor',5, ...
+                    'threshold_ON',1.5,'plotDebug',true,'behColumn',2);
+Felipe_lev0_readframes_behaviorTTL(dirsel, overwrite, optsBehTTL);
+
+%% 3) Align calcium TTL frames to behavior TTL frames
+Felipe_align_ca_with_behaviorTTL(dirsel, overwrite);
+
+%% 4) Build speed from your CSV (this step adapts to your table)
+
+optsCSV = struct('pixel2cm', 0.02, 'smoothSigma_s', 0.2);
+Felipe_beh_make_speed_from_csv(dirsel, overwrite, optsCSV);
+
+
+
+%% 5) Loco bouts + mapping to CA + plots
+optsBout = struct('thrOn_cm_s',3,'peakMin_cm_s',4,'mergeGap_s',1,'minDur_s',3);
+optsPlot = struct('peri_pre_s',2,'peri_post_s',10,'shadeType','sem','minOnsets',3);
+Felipe_loco_analysis_from_csv(dirsel, overwrite, optsBout, optsPlot);
+
+ %% 5 - alternative
+optsBout = struct('thrOn_cm_s',3,'peakMin_cm_s',4,'mergeGap_s',1,'minDur_s',3);
+optsPlot = struct('peri_pre_s',2,'peri_post_s',10,'shadeType','sem','minOnsets',3, ...
+                  'preStill_s',1, 'examples_N',6, 'examples_strategy','longest');
+
+Felipe_loco_analysis_from_csv(dirsel, overwrite, optsBout, optsPlot);
+%%
