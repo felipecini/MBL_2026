@@ -3,6 +3,7 @@ function Felipe_lev2_calculate_dFF(dirsel,overwrite)
 % saves in datadFF struct as "goodCells"
 
 % Katie Ferguson, Yale University, 2016
+% Felipe Cini, Yale University, 2026
 
 global info
 global outputDirCardin
